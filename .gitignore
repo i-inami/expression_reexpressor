@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# venv / uv
+.venv/
+venv/
+uv.lock.bak
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# AWS SAM
+.aws-sam/
+samconfig.toml.local
+
+# AWS Lambda build artifacts
+*.zip
+lambda-package/
+
+# Docker
+*.log
+docker-compose.override.yml
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# GitHub Actions local runner (act)
+.act/
