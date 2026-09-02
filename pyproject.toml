@@ -5,12 +5,14 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi",
     "sympy",
+    "mangum",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "ruff",
+    "black",
 ]
 
 [build-system]

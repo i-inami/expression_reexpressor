@@ -24,9 +24,13 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# AWS SAM
-.aws-sam/
-samconfig.toml.local
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+# .terraform.lock.hcl is tracked intentionally (pins provider versions)
 
 # AWS Lambda build artifacts
 *.zip
