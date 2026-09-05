@@ -1,29 +1,77 @@
 from fastapi import FastAPI, HTTPException
 from mangum import Mangum
-from pydantic import BaseModel
-from sympy import Eq, Symbol, solve, sstr
+from pydantic import BaseModel, Field
+from sympy import Basic, Eq, Symbol, solve, sstr
 from sympy.parsing.sympy_parser import parse_expr
 
 app = FastAPI()
 
 
 class ReexpressRequest(BaseModel):
-    expression: str
+    expressions: list[str]
     variable: str
+    required: list[str] = Field(default_factory=list)
 
 
 class ReexpressResponse(BaseModel):
     expressions: list[str]
 
 
+def _parse_equation(expression: str):
+    lhs_str, sep, rhs_str = expression.partition("=")
+    if sep:
+        return Eq(parse_expr(lhs_str), parse_expr(rhs_str))
+    return Eq(parse_expr(lhs_str), 0)
+
+
+def _solution_values(result, symbol: Symbol) -> list:
+    if isinstance(result, dict):
+        return [result[symbol]]
+    return [item[0] if isinstance(item, tuple) else item for item in result]
+
+
+def _substitute_required(
+    expr: Basic, aux_equations: list[Eq], required: set[Symbol]
+) -> Basic:
+    """Eliminate free symbols not in `required` using other equations that
+    don't reference the already-solved-for symbol, until no more progress
+    can be made (remaining symbols are treated as known constants)."""
+    if not required:
+        return expr
+    remaining = list(aux_equations)
+    progressed = True
+    while progressed:
+        progressed = False
+        for symbol in expr.free_symbols - required:
+            for i, eq in enumerate(remaining):
+                if symbol not in eq.free_symbols:
+                    continue
+                eq_solutions = solve(eq, symbol)
+                if eq_solutions:
+                    expr = expr.subs(symbol, eq_solutions[0])
+                    remaining.pop(i)
+                    progressed = True
+                    break
+            if progressed:
+                break
+    return expr
+
+
 @app.post("/reexpress", response_model=ReexpressResponse)
 def reexpress(req: ReexpressRequest) -> ReexpressResponse:
-    lhs_str, sep, rhs_str = req.expression.partition("=")
+    symbol = Symbol(req.variable)
+    required = {Symbol(v) for v in req.required}
     try:
-        equation = (
-            Eq(parse_expr(lhs_str), parse_expr(rhs_str)) if sep else parse_expr(lhs_str)
-        )
-        solutions = solve(equation, Symbol(req.variable))
+        equations = [_parse_equation(e) for e in req.expressions]
+        aux_equations = [
+            eq
+            for eq in equations
+            if isinstance(eq, Eq) and symbol not in eq.free_symbols
+        ]
+        solutions = _solution_values(solve(equations, symbol), symbol)
+        solutions = [
+            _substitute_required(s, aux_equations, required) for s in solutions
+        ]
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"invalid expression: {exc}"
