@@ -52,3 +52,7 @@ regardless, so that grant is a no-op in practice. The one thing that stays perma
 local-apply-only is the boundary policy itself, and detaching/replacing it on the role
 (`terraform/main.tf`'s `ci_boundary` resource comment explains why) — routine CI runs
 can freely manage everything else, including day-to-day changes to its own role.
+
+Actions in `.github/workflows/test.yml` are pinned to a commit SHA (not a mutable tag)
+via [pinact](https://github.com/suzuki-shunsuke/pinact), so a tag hijack upstream can't
+silently change what CI runs. To bump a version: `pinact run --update`.
