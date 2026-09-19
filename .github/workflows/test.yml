@@ -25,6 +25,7 @@ jobs:
     needs: [pytest, lint]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       id-token: write
       contents: read
