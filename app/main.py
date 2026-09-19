@@ -4,7 +4,24 @@ import operator
 from fastapi import FastAPI, HTTPException
 from mangum import Mangum
 from pydantic import BaseModel, Field
-from sympy import Basic, Eq, Number, Symbol, factorial, solve, sstr
+from sympy import (
+    Basic,
+    Eq,
+    Number,
+    Symbol,
+    acos,
+    asin,
+    atan,
+    cos,
+    exp,
+    factorial,
+    log,
+    sin,
+    solve,
+    sqrt,
+    sstr,
+    tan,
+)
 
 app = FastAPI()
 
@@ -29,6 +46,15 @@ _UNARY_OPS = {
 }
 _ALLOWED_CALLS = {
     "factorial": factorial,
+    "sqrt": sqrt,
+    "exp": exp,
+    "log": log,
+    "sin": sin,
+    "cos": cos,
+    "tan": tan,
+    "asin": asin,
+    "acos": acos,
+    "atan": atan,
 }
 
 

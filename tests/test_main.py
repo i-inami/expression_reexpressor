@@ -46,8 +46,22 @@ def test_reexpress_allows_factorial_call():
 
 
 def test_reexpress_rejects_call_to_unlisted_name():
-    r = client.post("/reexpress", json={"expressions": ["y=sqrt(x)"], "variable": "y"})
+    r = client.post("/reexpress", json={"expressions": ["y=floor(x)"], "variable": "y"})
     assert r.status_code == 400
+
+
+def test_reexpress_allows_sqrt_call():
+    r = client.post("/reexpress", json={"expressions": ["y=sqrt(x)"], "variable": "y"})
+    assert r.status_code == 200
+    assert r.json() == {"expressions": ["sqrt(x)"]}
+
+
+def test_reexpress_allows_log_with_base():
+    r = client.post(
+        "/reexpress", json={"expressions": ["y=log(x, 2)"], "variable": "y"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"expressions": ["log(x)/log(2)"]}
 
 
 def test_reexpress_single_solution():
