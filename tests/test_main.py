@@ -28,12 +28,25 @@ def test_reexpress_rejects_dunder_attribute_walk():
 
 
 def test_reexpress_rejects_builtin_via_bare_name():
-    # No underscores or quotes -- passes any character allowlist, but sympy's
-    # default parse_expr namespace still resolves bare builtin names for real.
+    # `eval` and `chr` aren't in the AST walker's call allowlist, regardless
+    # of how innocuous the characters look.
     r = client.post(
         "/reexpress",
         json={"expressions": ["eval(chr(49)+chr(43)+chr(49))"], "variable": "x"},
     )
+    assert r.status_code == 400
+
+
+def test_reexpress_allows_factorial_call():
+    r = client.post(
+        "/reexpress", json={"expressions": ["y=factorial(x)"], "variable": "y"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"expressions": ["factorial(x)"]}
+
+
+def test_reexpress_rejects_call_to_unlisted_name():
+    r = client.post("/reexpress", json={"expressions": ["y=sqrt(x)"], "variable": "y"})
     assert r.status_code == 400
 
 
