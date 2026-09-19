@@ -30,6 +30,7 @@ htmlcov/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+.tf-state-bucket-name
 # .terraform.lock.hcl is tracked intentionally (pins provider versions)
 
 # AWS Lambda build artifacts

@@ -1,0 +1,11 @@
+.venv/
+.git/
+.github/
+tests/
+terraform/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+README.md
+CLAUDE.md

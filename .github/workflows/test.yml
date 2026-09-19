@@ -2,18 +2,67 @@ name: test
 
 on: push
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
       - run: uv run pytest
 
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
       - run: uv run ruff check .
       - run: uv run black --check .
+
+  deploy:
+    needs: [pytest, lint]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_VAR_github_repo: ${{ github.repository }}
+      TF_VAR_tf_state_bucket: ${{ secrets.TF_STATE_BUCKET }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-1
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+
+      - name: terraform init
+        working-directory: terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="region=ap-northeast-1"
+
+      # Container Lambda needs an image to exist before it can be created,
+      # so the ECR repo is applied on its own first.
+      - name: ensure ECR repo exists
+        working-directory: terraform
+        run: terraform apply -target=aws_ecr_repository.app -auto-approve
+
+      - name: build and push image
+        working-directory: terraform
+        run: |
+          repo_url=$(terraform output -raw ecr_repository_url)
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${repo_url%/*}"
+          docker build -t "$repo_url:${{ github.sha }}" ..
+          docker push "$repo_url:${{ github.sha }}"
+
+      - name: terraform apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -var "image_tag=${{ github.sha }}"

@@ -5,6 +5,38 @@ from app.main import app
 client = TestClient(app)
 
 
+def test_reexpress_rejects_code_injection():
+    r = client.post(
+        "/reexpress",
+        json={
+            "expressions": ["__import__('os').system('echo pwned')"],
+            "variable": "x",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_reexpress_rejects_dunder_attribute_walk():
+    r = client.post(
+        "/reexpress",
+        json={
+            "expressions": ["().__class__.__bases__[0].__subclasses__()"],
+            "variable": "x",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_reexpress_rejects_builtin_via_bare_name():
+    # No underscores or quotes -- passes any character allowlist, but sympy's
+    # default parse_expr namespace still resolves bare builtin names for real.
+    r = client.post(
+        "/reexpress",
+        json={"expressions": ["eval(chr(49)+chr(43)+chr(49))"], "variable": "x"},
+    )
+    assert r.status_code == 400
+
+
 def test_reexpress_single_solution():
     r = client.post("/reexpress", json={"expressions": ["y=a*x+b"], "variable": "x"})
     assert r.status_code == 200
