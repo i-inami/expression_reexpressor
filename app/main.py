@@ -3,18 +3,34 @@ import re
 from fastapi import FastAPI, HTTPException
 from mangum import Mangum
 from pydantic import BaseModel, Field
-from sympy import Basic, Eq, Symbol, solve, sstr
+from sympy import Basic, Eq, Float, Integer, Symbol, solve, sstr
 from sympy.parsing.sympy_parser import parse_expr
 
 app = FastAPI()
 
-# sympy's parse_expr evaluates via Python's eval() with no sandboxing (e.g.
-# `__import__('os').system(...)` runs as-is), so incoming expressions are
-# restricted to characters an algebraic equation can actually need. This also
-# blocks `_`, closing the no-import-needed sandbox-escape pattern
-# (`().__class__.__bases__[0].__subclasses__()`), which uses none of the
-# characters excluded above.
+# sympy's parse_expr evaluates via Python's eval() with no sandboxing. Two
+# independent layers, since each alone is bypassable:
+#
+# 1. parse_expr's default global_dict auto-injects the real Python
+#    __builtins__, so any bare builtin name *without* an underscore resolves
+#    to the real function -- e.g. `eval(chr(49)+chr(43)+chr(49))` runs
+#    eval("1+1") for real, entirely through names a character filter has no
+#    reason to flag. Passing an explicit global_dict containing only what
+#    the parser's own transformations emit (Symbol/Integer/Float), with
+#    __builtins__ locked to {}, makes every other bare name a NameError
+#    instead of a real callable.
+# 2. That alone doesn't stop `().__class__.__bases__[0].__subclasses__()` --
+#    pure attribute/index access on a literal needs no name lookup at all,
+#    so it's unaffected by global_dict. Restricting input to characters an
+#    algebraic equation can actually need closes this off: no `_` (blocks
+#    every dunder), no `[` `]` (blocks indexing).
 _SAFE_EXPRESSION = re.compile(r"[A-Za-z0-9\s+\-*/().,=]+")
+_PARSE_GLOBALS = {
+    "Symbol": Symbol,
+    "Integer": Integer,
+    "Float": Float,
+    "__builtins__": {},
+}
 
 
 class ReexpressRequest(BaseModel):
@@ -32,8 +48,11 @@ def _parse_equation(expression: str):
         raise ValueError(f"unsupported characters in expression: {expression!r}")
     lhs_str, sep, rhs_str = expression.partition("=")
     if sep:
-        return Eq(parse_expr(lhs_str), parse_expr(rhs_str))
-    return Eq(parse_expr(lhs_str), 0)
+        return Eq(
+            parse_expr(lhs_str, global_dict=_PARSE_GLOBALS),
+            parse_expr(rhs_str, global_dict=_PARSE_GLOBALS),
+        )
+    return Eq(parse_expr(lhs_str, global_dict=_PARSE_GLOBALS), 0)
 
 
 def _solution_values(result, symbol: Symbol) -> list:
