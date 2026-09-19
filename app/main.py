@@ -1,36 +1,86 @@
-import re
+import ast
+import operator
 
 from fastapi import FastAPI, HTTPException
 from mangum import Mangum
 from pydantic import BaseModel, Field
-from sympy import Basic, Eq, Float, Integer, Symbol, solve, sstr
-from sympy.parsing.sympy_parser import parse_expr
+from sympy import (
+    Basic,
+    Eq,
+    Number,
+    Symbol,
+    acos,
+    asin,
+    atan,
+    cos,
+    exp,
+    factorial,
+    log,
+    sin,
+    solve,
+    sqrt,
+    sstr,
+    tan,
+)
 
 app = FastAPI()
 
-# sympy's parse_expr evaluates via Python's eval() with no sandboxing. Two
-# independent layers, since each alone is bypassable:
-#
-# 1. parse_expr's default global_dict auto-injects the real Python
-#    __builtins__, so any bare builtin name *without* an underscore resolves
-#    to the real function -- e.g. `eval(chr(49)+chr(43)+chr(49))` runs
-#    eval("1+1") for real, entirely through names a character filter has no
-#    reason to flag. Passing an explicit global_dict containing only what
-#    the parser's own transformations emit (Symbol/Integer/Float), with
-#    __builtins__ locked to {}, makes every other bare name a NameError
-#    instead of a real callable.
-# 2. That alone doesn't stop `().__class__.__bases__[0].__subclasses__()` --
-#    pure attribute/index access on a literal needs no name lookup at all,
-#    so it's unaffected by global_dict. Restricting input to characters an
-#    algebraic equation can actually need closes this off: no `_` (blocks
-#    every dunder), no `[` `]` (blocks indexing).
-_SAFE_EXPRESSION = re.compile(r"[A-Za-z0-9\s+\-*/().,=]+")
-_PARSE_GLOBALS = {
-    "Symbol": Symbol,
-    "Integer": Integer,
-    "Float": Float,
-    "__builtins__": {},
+# sympy's parse_expr evaluates via Python's eval() with no sandboxing, and no
+# combination of global_dict/character-allowlist closes it off completely
+# (e.g. `().__class__.__bases__[0].__subclasses__()` needs no name lookup at
+# all). Instead, expressions are parsed with Python's own `ast` module
+# (syntax only, nothing is executed) and walked by hand below, translating
+# only an explicit allowlist of node shapes into sympy calls. Anything else
+# -- a call to a name not in _ALLOWED_CALLS, attribute/subscript access,
+# string/import/etc. -- falls through to the final raise.
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
 }
+_UNARY_OPS = {
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+_ALLOWED_CALLS = {
+    "factorial": factorial,
+    "sqrt": sqrt,
+    "exp": exp,
+    "log": log,
+    "sin": sin,
+    "cos": cos,
+    "tan": tan,
+    "asin": asin,
+    "acos": acos,
+    "atan": atan,
+}
+
+
+def _safe_eval(node: ast.AST):
+    if isinstance(node, ast.Expression):
+        return _safe_eval(node.body)
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
+        return _BIN_OPS[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+        return _UNARY_OPS[type(node.op)](_safe_eval(node.operand))
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return Number(node.value)
+    if isinstance(node, ast.Name):
+        return Symbol(node.id)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _ALLOWED_CALLS
+        and not node.keywords
+    ):
+        return _ALLOWED_CALLS[node.func.id](*(_safe_eval(a) for a in node.args))
+    raise ValueError(f"unsupported syntax: {ast.dump(node)}")
+
+
+def _parse_expr(expression: str) -> Basic:
+    return _safe_eval(ast.parse(expression, mode="eval"))
 
 
 class ReexpressRequest(BaseModel):
@@ -44,15 +94,10 @@ class ReexpressResponse(BaseModel):
 
 
 def _parse_equation(expression: str):
-    if not _SAFE_EXPRESSION.fullmatch(expression):
-        raise ValueError(f"unsupported characters in expression: {expression!r}")
     lhs_str, sep, rhs_str = expression.partition("=")
     if sep:
-        return Eq(
-            parse_expr(lhs_str, global_dict=_PARSE_GLOBALS),
-            parse_expr(rhs_str, global_dict=_PARSE_GLOBALS),
-        )
-    return Eq(parse_expr(lhs_str, global_dict=_PARSE_GLOBALS), 0)
+        return Eq(_parse_expr(lhs_str), _parse_expr(rhs_str))
+    return Eq(_parse_expr(lhs_str), 0)
 
 
 def _solution_values(result, symbol: Symbol) -> list:
