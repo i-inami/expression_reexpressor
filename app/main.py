@@ -1,3 +1,5 @@
+import re
+
 from fastapi import FastAPI, HTTPException
 from mangum import Mangum
 from pydantic import BaseModel, Field
@@ -5,6 +7,14 @@ from sympy import Basic, Eq, Symbol, solve, sstr
 from sympy.parsing.sympy_parser import parse_expr
 
 app = FastAPI()
+
+# sympy's parse_expr evaluates via Python's eval() with no sandboxing (e.g.
+# `__import__('os').system(...)` runs as-is), so incoming expressions are
+# restricted to characters an algebraic equation can actually need. This also
+# blocks `_`, closing the no-import-needed sandbox-escape pattern
+# (`().__class__.__bases__[0].__subclasses__()`), which uses none of the
+# characters excluded above.
+_SAFE_EXPRESSION = re.compile(r"[A-Za-z0-9\s+\-*/().,=]+")
 
 
 class ReexpressRequest(BaseModel):
@@ -18,6 +28,8 @@ class ReexpressResponse(BaseModel):
 
 
 def _parse_equation(expression: str):
+    if not _SAFE_EXPRESSION.fullmatch(expression):
+        raise ValueError(f"unsupported characters in expression: {expression!r}")
     lhs_str, sep, rhs_str = expression.partition("=")
     if sep:
         return Eq(parse_expr(lhs_str), parse_expr(rhs_str))

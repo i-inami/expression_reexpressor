@@ -5,6 +5,17 @@ from app.main import app
 client = TestClient(app)
 
 
+def test_reexpress_rejects_code_injection():
+    r = client.post(
+        "/reexpress",
+        json={
+            "expressions": ["__import__('os').system('echo pwned')"],
+            "variable": "x",
+        },
+    )
+    assert r.status_code == 400
+
+
 def test_reexpress_single_solution():
     r = client.post("/reexpress", json={"expressions": ["y=a*x+b"], "variable": "x"})
     assert r.status_code == 200
