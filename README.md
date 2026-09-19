@@ -16,10 +16,10 @@ curl -X POST localhost:8000/reexpress \
 
 ## Deploy
 
-Infrastructure (Lambda behind an HTTP API Gateway, deployed as a container image)
-lives in `terraform/`. GitHub Actions deploys automatically on every push to `main`,
-authenticating via a GitHub OIDC federated role — no long-lived AWS keys are stored
-anywhere.
+Infrastructure (Lambda behind a REST API Gateway requiring an API key, deployed as a
+container image) lives in `terraform/`. GitHub Actions deploys automatically on every
+push to `main`, authenticating via a GitHub OIDC federated role — no long-lived AWS
+keys are stored anywhere.
 
 One-time setup (needs your own AWS credentials locally). A brand-new ECR repo has no
 image yet, so the Lambda function can't be created until one exists — push an initial
@@ -43,6 +43,16 @@ terraform apply -var tf_state_bucket=<printed above> -var github_repo=<org>/<rep
 Copy the `gha_role_arn` output into a repo secret named `AWS_DEPLOY_ROLE_ARN`, and the
 bucket name into one named `TF_STATE_BUCKET`. From then on, pushes to `main` deploy
 automatically (tests/lint must pass first).
+
+The deployed endpoint requires an API key (the local `## Invoke` example above doesn't,
+since that hits the app directly with no API Gateway in front):
+
+```
+curl -X POST "$(terraform output -raw api_endpoint)/reexpress" \
+  -H 'content-type: application/json' \
+  -H "x-api-key: $(terraform output -raw api_key_value)" \
+  -d '{"expressions":["y=a*x+b"],"variable":"x"}'
+```
 
 **Note:** the CI role (`gha_deploy`) has full read/write on its own IAM role and the
 OIDC provider — a compromised PR can attach whatever it wants (even

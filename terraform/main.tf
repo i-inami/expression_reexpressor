@@ -68,30 +68,80 @@ resource "aws_lambda_function" "app" {
   depends_on = [aws_cloudwatch_log_group.lambda]
 }
 
-# --- HTTP API Gateway -------------------------------------------------------
+# --- REST API Gateway --------------------------------------------------
+#
+# A REST API, not the simpler HTTP API type: HTTP APIs have no API Key /
+# Usage Plan support at all, and requiring a key on the endpoint is the
+# whole point here. Like the ECR repo, creating this API/key/usage-plan for
+# the first time has to happen via local bootstrap credentials -- see the
+# ApiGatewayManage comment on gha_deploy's policy below for why.
 
-resource "aws_apigatewayv2_api" "http_api" {
-  name          = var.project_name
-  protocol_type = "HTTP"
+resource "aws_api_gateway_rest_api" "app" {
+  name = var.project_name
 }
 
-resource "aws_apigatewayv2_integration" "lambda" {
-  api_id                 = aws_apigatewayv2_api.http_api.id
-  integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.app.invoke_arn
-  payload_format_version = "2.0"
+resource "aws_api_gateway_resource" "proxy" {
+  rest_api_id = aws_api_gateway_rest_api.app.id
+  parent_id   = aws_api_gateway_rest_api.app.root_resource_id
+  path_part   = "{proxy+}"
 }
 
-resource "aws_apigatewayv2_route" "default" {
-  api_id    = aws_apigatewayv2_api.http_api.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+resource "aws_api_gateway_method" "proxy" {
+  rest_api_id      = aws_api_gateway_rest_api.app.id
+  resource_id      = aws_api_gateway_resource.proxy.id
+  http_method      = "ANY"
+  authorization    = "NONE"
+  api_key_required = true
 }
 
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.http_api.id
-  name        = "$default"
-  auto_deploy = true
+resource "aws_api_gateway_integration" "lambda" {
+  rest_api_id             = aws_api_gateway_rest_api.app.id
+  resource_id             = aws_api_gateway_resource.proxy.id
+  http_method             = aws_api_gateway_method.proxy.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.app.invoke_arn
+}
+
+resource "aws_api_gateway_deployment" "app" {
+  rest_api_id = aws_api_gateway_rest_api.app.id
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.proxy.id,
+      aws_api_gateway_method.proxy.id,
+      aws_api_gateway_integration.lambda.id,
+    ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_api_gateway_stage" "default" {
+  rest_api_id   = aws_api_gateway_rest_api.app.id
+  deployment_id = aws_api_gateway_deployment.app.id
+  stage_name    = "prod"
+}
+
+resource "aws_api_gateway_api_key" "app" {
+  name = "${var.project_name}-key"
+}
+
+resource "aws_api_gateway_usage_plan" "app" {
+  name = "${var.project_name}-usage-plan"
+
+  api_stages {
+    api_id = aws_api_gateway_rest_api.app.id
+    stage  = aws_api_gateway_stage.default.stage_name
+  }
+}
+
+resource "aws_api_gateway_usage_plan_key" "app" {
+  key_id        = aws_api_gateway_api_key.app.id
+  key_type      = "API_KEY"
+  usage_plan_id = aws_api_gateway_usage_plan.app.id
 }
 
 resource "aws_lambda_permission" "apigw" {
@@ -99,7 +149,7 @@ resource "aws_lambda_permission" "apigw" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.app.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
+  source_arn    = "${aws_api_gateway_rest_api.app.execution_arn}/*/*"
 }
 
 # --- GitHub OIDC deploy role ------------------------------------------------
@@ -246,14 +296,19 @@ resource "aws_iam_role_policy" "gha_deploy" {
         Sid    = "ApiGatewayManage"
         Effect = "Allow"
         Action = "apigateway:*"
-        # /apis/{id} for actions on the API resource itself (GetApi, UpdateApi,
-        # DeleteApi, ...), /apis/{id}/* for its sub-resources (routes,
-        # integrations, stages). CreateApi itself isn't covered -- the API is
-        # created once via local bootstrap (human credentials, not this
-        # policy), same as the ECR repo and Lambda function.
+        # /restapis/{id} for actions on the API resource itself, /restapis/{id}/*
+        # for its sub-resources (resources, methods, integrations, deployments,
+        # stages). /apikeys/{id} and /usageplans/{id}(/*) likewise for the key
+        # and usage plan. Creating any of these from nothing isn't covered --
+        # like the ECR repo, they're created once via local bootstrap (human
+        # credentials, not this policy); this only lets CI manage the
+        # already-existing, specifically-ID'd ones.
         Resource = [
-          "arn:aws:apigateway:${var.aws_region}::/apis/${aws_apigatewayv2_api.http_api.id}",
-          "arn:aws:apigateway:${var.aws_region}::/apis/${aws_apigatewayv2_api.http_api.id}/*",
+          "arn:aws:apigateway:${var.aws_region}::/restapis/${aws_api_gateway_rest_api.app.id}",
+          "arn:aws:apigateway:${var.aws_region}::/restapis/${aws_api_gateway_rest_api.app.id}/*",
+          "arn:aws:apigateway:${var.aws_region}::/apikeys/${aws_api_gateway_api_key.app.id}",
+          "arn:aws:apigateway:${var.aws_region}::/usageplans/${aws_api_gateway_usage_plan.app.id}",
+          "arn:aws:apigateway:${var.aws_region}::/usageplans/${aws_api_gateway_usage_plan.app.id}/*",
         ]
       },
       {
